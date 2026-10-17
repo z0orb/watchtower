@@ -137,3 +137,8 @@ func (m *Machine) Step(p Probe, now time.Time) []Action {
 	}
 	return append(out, a)
 }
+
+var actionNames = [...]string{"flush_dns", "set_public_dns", "restore_dns", "renew_dhcp", "restart_adapter",
+	"alert_upstream", "alert_gateway_changed", "alert_give_up"}
+
+func (a Action) String() string { return actionNames[a] }

@@ -1,0 +1,290 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
+	"net"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/gopacket/gopacket/layers"
+
+	"github.com/z0orb/watchtower/internal/arpguard"
+	"github.com/z0orb/watchtower/internal/netwatch"
+	"github.com/z0orb/watchtower/internal/store"
+	"github.com/z0orb/watchtower/internal/winnet"
+)
+
+// probeEvery must match the tick netwatch.DefaultConfig.Fails is counted in.
+const probeEvery = 5 * time.Second
+
+// state is persisted to state.json.
+type state struct {
+	Trusted     map[string]string `json:"trusted"`       // network key -> gateway MAC
+	PublicDNSIf int               `json:"public_dns_if"` // adapter we switched to public DNS; 0 = none
+	RouterDNS   string            `json:"router_dns"`    // its DHCP DNS server, checked to know when to switch back
+}
+
+type guard struct {
+	log   *slog.Logger
+	path  string
+	st    state
+	m     *netwatch.Machine
+	npcap bool
+
+	cur        winnet.Adapter
+	key        string // SSID (or "wired") + "|" + gateway IP
+	trusted    net.HardwareAddr
+	capt       *arpguard.Capture
+	newGateway net.HardwareAddr // MAC the gateway answers with when it differs from trusted
+
+	detMu sync.Mutex // det is used from the capture goroutine
+	det   *arpguard.Detector
+}
+
+func runGuard(ctx context.Context, log *slog.Logger) error {
+	g := &guard{
+		log:   log,
+		path:  filepath.Join(store.Dir(), "state.json"),
+		m:     netwatch.New(netwatch.DefaultConfig),
+		npcap: arpguard.NpcapAvailable(),
+	}
+	if err := store.Load(g.path, &g.st); err != nil {
+		return fmt.Errorf("load %s: %w", g.path, err)
+	}
+	if g.st.Trusted == nil {
+		g.st.Trusted = map[string]string{}
+	}
+	log.Info("started", "npcap", g.npcap)
+	if !g.npcap {
+		g.alert("npcap_missing", "Npcap is not installed: live ARP monitoring is off. Install it from https://npcap.com")
+	}
+	if g.st.PublicDNSIf != 0 {
+		g.restoreDNS() // left over from a crash or power loss
+	}
+	defer g.shutdown()
+
+	t := time.NewTicker(probeEvery)
+	defer t.Stop()
+	for {
+		g.tick(time.Now())
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+		}
+	}
+}
+
+func (g *guard) tick(now time.Time) {
+	ads, err := winnet.Adapters()
+	if err != nil {
+		g.log.Error("list adapters", "err", err)
+		return
+	}
+	if best, ok := pickAdapter(ads); ok && (best.Index != g.cur.Index || !best.Gateway.Equal(g.cur.Gateway)) {
+		g.connect(best)
+	} else if g.cur.Index == 0 {
+		return // never connected yet
+	} else {
+		g.cur.Up = false
+		for _, a := range ads {
+			if a.Index == g.cur.Index && a.Up {
+				g.cur.Up, g.cur.IP, g.cur.DNS = true, a.IP, a.DNS
+			}
+		}
+	}
+	for _, a := range g.m.Step(g.probe(), now) {
+		g.do(a)
+	}
+}
+
+// pickAdapter returns the connected physical adapter with a gateway and the lowest metric.
+func pickAdapter(ads []winnet.Adapter) (winnet.Adapter, bool) {
+	var best winnet.Adapter
+	found := false
+	for _, a := range ads {
+		if a.Up && a.Physical && a.IP != nil && a.Gateway != nil && !a.Gateway.IsUnspecified() &&
+			(!found || a.Metric < best.Metric) {
+			best, found = a, true
+		}
+	}
+	return best, found
+}
+
+func (g *guard) connect(a winnet.Adapter) {
+	g.disconnect()
+	g.cur = a
+	ssid := "wired"
+	if a.Wireless {
+		ssid = winnet.SSID(a.GUID)
+	}
+	g.key = ssid + "|" + a.Gateway.String()
+	g.log.Info("connected", "adapter", a.Name, "network", g.key)
+
+	if g.npcap {
+		c, err := arpguard.OpenCapture(a.GUID, a.MAC, a.IP)
+		if err != nil {
+			g.log.Error("open capture", "adapter", a.Name, "err", err)
+		} else {
+			g.capt = c
+			go c.Run(g.onARP)
+		}
+	}
+
+	mac, err := net.ParseMAC(g.st.Trusted[g.key])
+	if err != nil { // first visit to this network: trust on first use
+		replies, perr := g.probeGateway()
+		if mac, err = arpguard.ChooseTrusted(replies); err != nil {
+			g.alert("trust_failed", "can't establish the gateway's real MAC; not pinning",
+				"network", g.key, "replies", fmt.Sprint(replies), "err", err, "probe_err", perr)
+			return
+		}
+		g.st.Trusted[g.key] = mac.String()
+		g.save()
+		g.log.Info("trusted gateway", "network", g.key, "mac", mac.String())
+	}
+	g.trusted = mac
+	if err := winnet.PinGateway(a.Index, a.Gateway, mac); err != nil {
+		g.log.Error("pin gateway", "err", err)
+	} else {
+		g.log.Info("pinned gateway", "ip", a.Gateway, "mac", mac.String())
+	}
+	g.detMu.Lock()
+	g.det = &arpguard.Detector{Gateway: a.Gateway, Trusted: mac, Cooldown: 5 * time.Minute}
+	g.detMu.Unlock()
+}
+
+func (g *guard) disconnect() {
+	if g.capt != nil {
+		g.capt.Close()
+		g.capt = nil
+	}
+	g.detMu.Lock()
+	g.det = nil
+	g.detMu.Unlock()
+	if g.trusted != nil {
+		if err := winnet.UnpinGateway(g.cur.Index, g.cur.Gateway); err != nil {
+			g.log.Warn("unpin gateway", "err", err)
+		}
+		g.trusted = nil
+	}
+}
+
+func (g *guard) shutdown() {
+	g.disconnect()
+	if g.st.PublicDNSIf != 0 {
+		g.restoreDNS()
+	}
+	g.log.Info("stopped")
+}
+
+// probeGateway lists every MAC answering for the gateway.
+func (g *guard) probeGateway() ([]net.HardwareAddr, error) {
+	if g.capt != nil {
+		return g.capt.Probe(g.cur.Gateway, 2*time.Second)
+	}
+	// shortcut: without Npcap only Windows' single answer is seen, so a racing attacker can win TOFU; install Npcap.
+	mac, err := winnet.ResolveMAC(g.cur.Gateway)
+	if err != nil {
+		return nil, err
+	}
+	return []net.HardwareAddr{mac}, nil
+}
+
+func (g *guard) onARP(a *layers.ARP) {
+	g.detMu.Lock()
+	var s arpguard.Spoof
+	bad := false
+	if g.det != nil {
+		s, bad = g.det.Check(a, time.Now())
+	}
+	g.detMu.Unlock()
+	switch {
+	case bad && s.Notify:
+		g.alert("arp_spoof", "forged ARP packet claims to be the gateway (blocked by the pin)",
+			"attacker", s.Attacker.String(), "gateway", net.IP(a.SourceProtAddress))
+	case bad:
+		g.log.Warn("arp spoof repeat", "attacker", s.Attacker.String())
+	}
+}
+
+func (g *guard) probe() netwatch.Probe {
+	p := netwatch.Probe{Network: g.key, Link: g.cur.Up}
+	if !p.Link {
+		return p
+	}
+	var wg sync.WaitGroup // each goroutine writes its own field of p
+	wg.Go(func() { p.Gateway = winnet.Ping(g.cur.Gateway, time.Second) })
+	wg.Go(func() {
+		p.Internet = winnet.Ping(net.IPv4(1, 1, 1, 1), time.Second) || winnet.Ping(net.IPv4(8, 8, 8, 8), time.Second)
+	})
+	wg.Go(func() { p.DNS = dnsWorks("", 2*time.Second) })
+	if g.st.PublicDNSIf != 0 && g.st.RouterDNS != "" {
+		wg.Go(func() { p.RouterDNS = dnsWorks(g.st.RouterDNS, 2*time.Second) })
+	}
+	wg.Wait()
+
+	g.newGateway = nil
+	if !p.Gateway && !p.Internet && g.trusted != nil && g.capt != nil {
+		replies, _ := g.capt.Probe(g.cur.Gateway, 2*time.Second)
+		if mac, err := arpguard.ChooseTrusted(replies); err == nil && !bytes.Equal(mac, g.trusted) {
+			p.GatewayMACChanged, g.newGateway = true, mac
+		}
+	}
+	return p
+}
+
+func (g *guard) do(a netwatch.Action) {
+	var err error
+	switch a {
+	case netwatch.FlushDNS:
+		err = winnet.FlushDNS()
+	case netwatch.SetPublicDNS:
+		if g.st.PublicDNSIf == 0 && len(g.cur.DNS) > 0 {
+			g.st.RouterDNS = g.cur.DNS[0].String()
+		}
+		g.st.PublicDNSIf = g.cur.Index
+		g.save() // before switching, so a crash still gets restored on the next start
+		err = winnet.SetPublicDNS(g.cur.Index)
+	case netwatch.RestoreDNS:
+		err = g.restoreDNS()
+	case netwatch.RenewDHCP:
+		err = winnet.RenewDHCP(g.cur.Name)
+	case netwatch.RestartAdapter:
+		err = winnet.RestartAdapter(g.cur.Name)
+	case netwatch.AlertUpstream:
+		g.alert("upstream", "router is reachable but the internet isn't: ISP or modem problem")
+	case netwatch.AlertGatewayChanged:
+		g.alert("gateway_changed", "gateway answers with a new MAC; re-trust it if you replaced the router",
+			"trusted", g.trusted.String(), "now", g.newGateway.String())
+	case netwatch.AlertGiveUp:
+		g.alert("recovery_failed", "automatic recovery didn't fix the connection; retrying in 5 minutes")
+	}
+	if err != nil {
+		g.log.Error("action failed", "action", a.String(), "err", err)
+	} else {
+		g.log.Info("action", "action", a.String())
+	}
+}
+
+func (g *guard) restoreDNS() error {
+	err := winnet.RestoreDNS(g.st.PublicDNSIf)
+	g.st.PublicDNSIf, g.st.RouterDNS = 0, ""
+	g.save()
+	return err
+}
+
+func (g *guard) save() {
+	if err := store.Save(g.path, g.st); err != nil {
+		g.log.Error("save state", "err", err)
+	}
+}
+
+// alert is a user-facing event; the tray app will show these as toasts once IPC exists.
+func (g *guard) alert(kind, msg string, args ...any) {
+	g.log.Warn(msg, append([]any{"alert", kind}, args...)...)
+}
