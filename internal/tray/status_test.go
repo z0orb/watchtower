@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/z0orb/watchtower/internal/ipc"
@@ -32,12 +33,63 @@ func TestSummary(t *testing.T) {
 }
 
 func TestHeldToast(t *testing.T) {
-	if title, body := heldToast([]string{"a"}); title != "Alert while you were busy" || body != "a" {
+	if title, body := heldToast(1); title != "1 alert while notifications were paused" || body != "Details are in the log (Open log)." {
 		t.Errorf("one: %q %q", title, body)
 	}
-	title, body := heldToast([]string{"a", "b", "a", "c", "d", "e"})
-	if title != "6 alerts while you were busy" || body != "a\nb\nc\n…and 2 more in the log" {
-		t.Errorf("many: %q %q", title, body)
+	if title, _ := heldToast(6); title != "6 alerts while notifications were paused" {
+		t.Errorf("many: %q", title)
+	}
+}
+
+func TestHold(t *testing.T) {
+	var h hold
+	if !h.alert(false) || h.release(false) != 0 {
+		t.Error("neither DnD nor busy: should toast now and hold nothing")
+	}
+
+	if h.alert(true) || h.release(true) != 0 || h.release(false) != 1 || h.release(false) != 0 {
+		t.Error("busy: should hold, release once when no longer busy")
+	}
+
+	h.setDND(true)
+	for range 3 {
+		if h.alert(false) {
+			t.Fatal("DnD: alert shown")
+		}
+	}
+	if h.release(false) != 0 {
+		t.Error("DnD: released while on")
+	}
+	h.setDND(false)
+	if n := h.release(false); n != 3 || h.release(false) != 0 {
+		t.Errorf("DnD off: released %d, want 3 once", n)
+	}
+
+	h.setDND(true)
+	h.alert(false)
+	h.setDND(false)
+	if h.release(true) != 0 || h.release(false) != 1 {
+		t.Error("DnD off while busy: should wait until not busy")
+	}
+
+	h.setDND(true)
+	h.setDND(false)
+	if h.release(false) != 0 {
+		t.Error("toggle with nothing held: empty summary")
+	}
+}
+
+func TestHoldConcurrent(t *testing.T) {
+	var h hold
+	h.setDND(true)
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Go(func() { h.alert(false) })
+	}
+	wg.Wait()
+	h.setDND(false)
+	if n := h.release(false); n != 100 {
+		t.Errorf("held %d, want 100", n)
 	}
 }
 

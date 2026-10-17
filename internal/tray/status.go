@@ -3,8 +3,7 @@ package tray
 
 import (
 	"fmt"
-	"slices"
-	"strings"
+	"sync"
 
 	"github.com/z0orb/watchtower/internal/ipc"
 )
@@ -73,20 +72,53 @@ func alertToast(kind, text string) (title, body string) {
 	return "Watchtower alert", text
 }
 
-// heldToast merges alerts held back during a game into one toast: the distinct messages, first 3 shown.
-func heldToast(alerts []string) (title, body string) {
-	var uniq []string
-	for _, a := range alerts {
-		if !slices.Contains(uniq, a) {
-			uniq = append(uniq, a)
-		}
+// hold counts alerts held back while Do Not Disturb is on or the user is busy; safe for concurrent use.
+type hold struct {
+	mu  sync.Mutex
+	dnd bool
+	n   int
+}
+
+// alert reports whether to toast an alert now; otherwise it is counted for a later summary.
+func (h *hold) alert(busy bool) (show bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.dnd || busy {
+		h.n++
+		return false
 	}
-	title = fmt.Sprintf("%d alerts while you were busy", len(alerts))
-	if len(alerts) == 1 {
-		title = "Alert while you were busy"
+	return true
+}
+
+func (h *hold) setDND(on bool) {
+	h.mu.Lock()
+	h.dnd = on
+	h.mu.Unlock()
+}
+
+func (h *hold) on() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.dnd
+}
+
+// release returns the number of held alerts to summarize now and forgets them; 0 while DnD or busy.
+func (h *hold) release(busy bool) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.dnd || busy {
+		return 0
 	}
-	if len(uniq) > 3 {
-		uniq = append(uniq[:3], fmt.Sprintf("…and %d more in the log", len(uniq)-3))
+	n := h.n
+	h.n = 0
+	return n
+}
+
+// heldToast summarizes n held alerts; the details are in the log.
+func heldToast(n int) (title, body string) {
+	title = fmt.Sprintf("%d alerts while notifications were paused", n)
+	if n == 1 {
+		title = "1 alert while notifications were paused"
 	}
-	return title, strings.Join(uniq, "\n")
+	return title, "Details are in the log (Open log)."
 }

@@ -3,6 +3,15 @@
 All notable changes to Watchtower. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Do Not Disturb** in the tray menu: alert toasts are held and only logged. Turning it off shows one toast,
+  "N alerts while notifications were paused", instead of every alert. It is off each time the tray starts.
+
+### Changed
+- Alerts held during fullscreen games and presentations are summarized the same way: a count, not a list.
+
 ## [0.1.1] - 2026-10-18
 
 ### Fixed
@@ -28,5 +37,6 @@ First release.
   Re-trust gateway, Restore DNS, Optimize adapter / Revert tuning, Connection report, Open log.
 - `install` / `uninstall` for the service and tray autostart.
 
+[Unreleased]: https://github.com/z0orb/watchtower/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/z0orb/watchtower/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/z0orb/watchtower/releases/tag/v0.1.0

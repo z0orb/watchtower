@@ -57,9 +57,11 @@ var done = map[string]string{
 type tray struct {
 	status *systray.MenuItem
 
+	hold hold
+
 	mu   sync.Mutex
-	conn net.Conn // nil while the service is unreachable
-	held []string // alerts held back while busy()
+	conn net.Conn    // nil while the service is unreachable
+	last *ipc.Status // last status shown, to redraw when DnD changes
 }
 
 // Run blocks until the user quits the tray. A second tray in the same session only points to the first.
@@ -84,13 +86,18 @@ func onReady(logPath string) {
 	dns := systray.AddMenuItem(labels["restore_dns"], "Switch back to the router's DNS servers")
 	optimize := systray.AddMenuItem(labels["optimize_adapter"], "Turn off adapter power saving (applies after a reboot)")
 	revert := systray.AddMenuItem(labels["revert_tuning"], "Restore the adapter settings changed by Optimize")
+	dnd := systray.AddMenuItemCheckbox("Do Not Disturb", "Hold alert toasts; they're still logged", false)
 	report := systray.AddMenuItem("Connection report", "Outages in the last 24 hours and 7 days")
 	openLog := systray.AddMenuItem("Open log", "")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit tray", "Protection keeps running in the service")
 
 	go t.connectLoop()
-	go t.flushHeld()
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			t.flush()
+		}
+	}()
 	go func() {
 		for {
 			select {
@@ -104,6 +111,18 @@ func onReady(logPath string) {
 				t.send("optimize_adapter")
 			case <-revert.ClickedCh:
 				t.send("revert_tuning")
+			case <-dnd.ClickedCh:
+				if dnd.Checked() {
+					dnd.Uncheck()
+				} else {
+					dnd.Check()
+				}
+				t.hold.setDND(dnd.Checked())
+				t.mu.Lock()
+				st := t.last
+				t.mu.Unlock()
+				t.show(st)
+				t.flush()
 			case <-report.ClickedCh:
 				if err := openReport(logPath); err != nil {
 					notify("Connection report failed", err.Error())
@@ -119,7 +138,13 @@ func onReady(logPath string) {
 }
 
 func (t *tray) show(st *ipc.Status) {
+	t.mu.Lock()
+	t.last = st
+	t.mu.Unlock()
 	s, l := Summary(st)
+	if t.hold.on() {
+		s += " · Do Not Disturb"
+	}
 	systray.SetIcon(icons[l])
 	t.status.SetTitle(s)
 	systray.SetTooltip("Watchtower: " + s)
@@ -173,36 +198,18 @@ func (t *tray) send(cmd string) {
 	}
 }
 
-// alert toasts now, or holds it until the game or presentation ends; command results are never held.
+// alert toasts now, or counts it while Do Not Disturb is on or a game or presentation runs; command results
+// are never held.
 func (t *tray) alert(kind, text string) {
-	title, body := alertToast(kind, text)
-	if !busy() {
-		notify(title, body)
-		return
+	if t.hold.alert(busy()) {
+		notify(alertToast(kind, text))
 	}
-	if title == "Watchtower alert" {
-		title = body // no short form: the full text is the only description
-	}
-	t.mu.Lock()
-	if len(t.held) < 100 {
-		t.held = append(t.held, title)
-	}
-	t.mu.Unlock()
 }
 
-func (t *tray) flushHeld() {
-	for range time.Tick(10 * time.Second) {
-		t.mu.Lock()
-		held := t.held
-		if len(held) > 0 && !busy() {
-			t.held = nil
-		} else {
-			held = nil
-		}
-		t.mu.Unlock()
-		if len(held) > 0 {
-			notify(heldToast(held))
-		}
+// flush shows one summary of the held alerts once neither Do Not Disturb nor busy() holds them.
+func (t *tray) flush() {
+	if n := t.hold.release(busy()); n > 0 {
+		notify(heldToast(n))
 	}
 }
 
