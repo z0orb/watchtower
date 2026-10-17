@@ -18,7 +18,7 @@ func TestLaunchAction(t *testing.T) {
 		{"not installed", "0.1.3", "", false, false, actInstall, "Install Watchtower 0.1.3?"},
 		{"stale key, exe gone", "0.1.3", "0.1.2", false, false, actInstall, "Install"},
 		{"same version", "0.1.3", "0.1.3", true, false, actOpenInstalled, ""},
-		{"pre-0.1.3 install", "0.1.3", "", true, false, actUpdate, "Update Watchtower to 0.1.3?"},
+		{"pre-0.2.0 install", "0.1.3", "", true, false, actUpdate, "Update Watchtower to 0.1.3?"},
 		{"newer", "0.1.3", "0.1.2", true, false, actUpdate, "Update Watchtower 0.1.2 → 0.1.3?"},
 		{"newer minor", "0.2.0", "0.1.9", true, false, actUpdate, "0.1.9 → 0.2.0"},
 		{"older", "0.1.2", "0.1.3", true, false, actUpdate, "Replace the installed Watchtower 0.1.3 with 0.1.2?"},

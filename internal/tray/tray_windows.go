@@ -161,7 +161,7 @@ func startService() {
 	name, _ := windows.UTF16PtrFromString("Watchtower")
 	s, err := windows.OpenService(m, name, windows.SERVICE_START)
 	if err != nil {
-		return // not installed, or installed by a version before 0.1.3
+		return // not installed, or installed by a version before 0.2.0
 	}
 	defer windows.CloseServiceHandle(s)
 	windows.StartService(s, 0, nil)

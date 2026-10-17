@@ -16,7 +16,7 @@ const (
 )
 
 // launchAction decides what a start without arguments (a double-click) does. installed is the version recorded
-// by install ("" if none, e.g. before 0.1.3); exists says whether the installed exe is there.
+// by install ("" if none, e.g. before 0.2.0); exists says whether the installed exe is there.
 func launchAction(running, installed string, exists, fromInstallDir bool) (action, string) {
 	switch {
 	case fromInstallDir:

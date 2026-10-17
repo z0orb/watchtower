@@ -19,7 +19,7 @@ import (
 
 const serviceName = "Watchtower"
 
-// version is set by the release build (-ldflags "-X main.version=0.1.3").
+// version is set by the release build (-ldflags "-X main.version=0.2.0").
 var version = "dev"
 
 const usage = `usage: watchtower <command>
