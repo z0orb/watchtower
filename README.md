@@ -14,13 +14,28 @@ Windows (10 LTSC, 10, 11) background tool that:
 ## Requirements
 
 - Windows 10 1809+ / Windows 11, administrator rights to install.
-- [Npcap](https://npcap.com) for live ARP monitoring (without it Watchtower falls back to polling).
+- [Npcap](https://npcap.com) for live ARP-spoof detection and a safer first-time gateway check. Without it
+  the gateway is still pinned, but forged packets aren't reported. Install Npcap before Watchtower, or
+  restart the service afterwards (`sc stop Watchtower && sc start Watchtower`).
 
 ## Install
 
+From an Administrator terminal:
+
 ```
-watchtower.exe install
-watchtower.exe uninstall
+watchtower.exe install     # copies itself to %ProgramFiles%\Watchtower, starts the service, adds the tray to startup
+watchtower.exe uninstall   # removes it all, unpins the gateway, restores DNS and adapter settings
+```
+
+The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
+your router), **Restore DNS**, **Optimize adapter** / **Revert tuning** (take effect after a reboot) and **Open log**.
+State and logs live in `%ProgramData%\Watchtower`.
+
+## Build
+
+```
+GOOS=windows go build ./cmd/watchtower
+go test ./...
 ```
 
 ## License
