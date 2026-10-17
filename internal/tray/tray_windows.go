@@ -9,15 +9,35 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+	"unsafe"
 
 	"fyne.io/systray"
 	toast "git.sr.ht/~jackmordaunt/go-toast/v2"
+	"golang.org/x/sys/windows"
 
 	"github.com/z0orb/watchtower/internal/ipc"
 )
 
-//go:embed icon.ico
-var icon []byte
+var (
+	//go:embed icon_ok.ico
+	iconOK []byte
+	//go:embed icon_warn.ico
+	iconWarn []byte
+	//go:embed icon_bad.ico
+	iconBad []byte
+
+	icons = map[Level][]byte{OK: iconOK, Warn: iconWarn, Bad: iconBad}
+)
+
+var procSHQueryUserNotificationState = windows.NewLazySystemDLL("shell32.dll").NewProc("SHQueryUserNotificationState")
+
+// busy reports whether a fullscreen game, presentation or quiet hours would make a toast intrusive.
+func busy() bool {
+	var st uint32
+	r, _, _ := procSHQueryUserNotificationState.Call(uintptr(unsafe.Pointer(&st)))
+	// QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE, QUNS_QUIET_TIME, QUNS_APP
+	return r == 0 && (st == 2 || st == 3 || st == 4 || st == 6 || st == 7)
+}
 
 const appID = "Watchtower"
 
@@ -36,6 +56,7 @@ type tray struct {
 
 	mu   sync.Mutex
 	conn net.Conn // nil while the service is unreachable
+	held []string // alerts held back while busy()
 }
 
 // Run blocks until the user quits the tray.
@@ -46,7 +67,6 @@ func Run(logPath string) {
 }
 
 func onReady(logPath string) {
-	systray.SetIcon(icon)
 	t := &tray{status: systray.AddMenuItem("", "")}
 	t.status.Disable()
 	t.show(nil)
@@ -61,6 +81,7 @@ func onReady(logPath string) {
 	quit := systray.AddMenuItem("Quit tray", "Protection keeps running in the service")
 
 	go t.connectLoop()
+	go t.flushHeld()
 	go func() {
 		for {
 			select {
@@ -85,7 +106,8 @@ func onReady(logPath string) {
 }
 
 func (t *tray) show(st *ipc.Status) {
-	s := Summary(st)
+	s, l := Summary(st)
+	systray.SetIcon(icons[l])
 	t.status.SetTitle(s)
 	systray.SetTooltip("Watchtower: " + s)
 }
@@ -118,7 +140,7 @@ func (t *tray) read(c net.Conn) {
 		case "status":
 			t.show(m.Status)
 		case "alert":
-			notify("Watchtower alert", m.Text)
+			t.alert(m.Text)
 		case "result":
 			if m.Text != "" {
 				notify(labels[m.Name]+" failed", m.Text)
@@ -135,6 +157,35 @@ func (t *tray) send(cmd string) {
 	t.mu.Unlock()
 	if c == nil || json.NewEncoder(c).Encode(ipc.Msg{Type: "cmd", Name: cmd}) != nil {
 		notify(labels[cmd]+" failed", "The Watchtower service isn't running")
+	}
+}
+
+// alert toasts now, or holds it until the game or presentation ends; command results are never held.
+func (t *tray) alert(msg string) {
+	if !busy() {
+		notify("Watchtower alert", msg)
+		return
+	}
+	t.mu.Lock()
+	if len(t.held) < 100 {
+		t.held = append(t.held, msg)
+	}
+	t.mu.Unlock()
+}
+
+func (t *tray) flushHeld() {
+	for range time.Tick(10 * time.Second) {
+		t.mu.Lock()
+		held := t.held
+		if len(held) > 0 && !busy() {
+			t.held = nil
+		} else {
+			held = nil
+		}
+		t.mu.Unlock()
+		if len(held) > 0 {
+			notify(heldToast(held))
+		}
 	}
 }
 
