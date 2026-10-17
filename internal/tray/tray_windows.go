@@ -2,6 +2,7 @@ package tray
 
 import (
 	"bufio"
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"net"
@@ -20,7 +21,14 @@ var icon []byte
 
 const appID = "Watchtower"
 
-var labels = map[string]string{"retrust": "Re-trust gateway", "restore_dns": "Restore DNS"}
+var labels = map[string]string{"retrust": "Re-trust gateway", "restore_dns": "Restore DNS",
+	"optimize_adapter": "Optimize adapter", "revert_tuning": "Revert tuning"}
+
+// done is the success message; the default is "Done".
+var done = map[string]string{
+	"optimize_adapter": "Adapter power saving is off. It takes effect after a reboot.",
+	"revert_tuning":    "Adapter settings restored. They take effect after a reboot.",
+}
 
 type tray struct {
 	status *systray.MenuItem
@@ -44,6 +52,8 @@ func onReady(logPath string) {
 	systray.AddSeparator()
 	retrust := systray.AddMenuItem(labels["retrust"], "Only after replacing your router: trusts the MAC it answers with now")
 	dns := systray.AddMenuItem(labels["restore_dns"], "Switch back to the router's DNS servers")
+	optimize := systray.AddMenuItem(labels["optimize_adapter"], "Turn off adapter power saving (applies after a reboot)")
+	revert := systray.AddMenuItem(labels["revert_tuning"], "Restore the adapter settings changed by Optimize")
 	openLog := systray.AddMenuItem("Open log", "")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit tray", "Protection keeps running in the service")
@@ -56,6 +66,10 @@ func onReady(logPath string) {
 				t.send("retrust")
 			case <-dns.ClickedCh:
 				t.send("restore_dns")
+			case <-optimize.ClickedCh:
+				t.send("optimize_adapter")
+			case <-revert.ClickedCh:
+				t.send("revert_tuning")
 			case <-openLog.ClickedCh:
 				exec.Command("notepad.exe", logPath).Start()
 			case <-quit.ClickedCh:
@@ -105,7 +119,7 @@ func (t *tray) read(c net.Conn) {
 			if m.Text != "" {
 				notify(labels[m.Name]+" failed", m.Text)
 			} else {
-				notify(labels[m.Name], "Done")
+				notify(labels[m.Name], cmp.Or(done[m.Name], "Done"))
 			}
 		}
 	}

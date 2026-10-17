@@ -155,6 +155,10 @@ func uninstall() error {
 		}
 	}
 
+	if err := revertTuning(); err != nil {
+		fmt.Println("Couldn't revert all adapter tuning (see", tuningPath()+"):", err)
+	}
+
 	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, runKey, registry.SET_VALUE); err == nil {
 		if err := k.DeleteValue(serviceName); err != nil && !errors.Is(err, registry.ErrNotExist) {
 			k.Close()

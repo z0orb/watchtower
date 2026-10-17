@@ -112,6 +112,13 @@ func (g *guard) command(name string) error {
 		return nil
 	case "restore_dns":
 		return g.restoreDNS()
+	case "optimize_adapter":
+		if g.cur.Index == 0 {
+			return errors.New("not connected")
+		}
+		return optimizeAdapter(g.cur.GUID)
+	case "revert_tuning":
+		return revertTuning()
 	}
 	return fmt.Errorf("unknown command %q", name)
 }
