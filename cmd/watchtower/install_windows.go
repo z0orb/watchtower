@@ -33,7 +33,7 @@ func requireAdmin() error {
 	return nil
 }
 
-func install() error {
+func install() (err error) {
 	if err := requireAdmin(); err != nil {
 		return err
 	}
@@ -54,6 +54,11 @@ func install() error {
 		if err := stopService(s); err != nil {
 			return err
 		}
+		defer func() {
+			if err != nil {
+				s.Start() // don't leave protection off because the update failed
+			}
+		}()
 	}
 	if !strings.EqualFold(src, dst) {
 		if err := copyExe(src, dst); err != nil {
@@ -108,12 +113,21 @@ func copyExe(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	old := dst + ".old"
-	os.Remove(old)
-	if err := os.Rename(dst, old); err != nil && !errors.Is(err, os.ErrNotExist) {
+	old := fmt.Sprintf("%s.%d.old", dst, time.Now().UnixNano()) // unique: an older .old may still be running
+	if err := os.Rename(dst, old); err == nil {
+		removeNowOrAtReboot(old)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o755)
+}
+
+// removeNowOrAtReboot deletes path, or schedules that for the next boot if a process still runs it.
+func removeNowOrAtReboot(path string) {
+	if os.Remove(path) != nil {
+		p16, _ := windows.UTF16PtrFromString(path)
+		windows.MoveFileEx(p16, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+	}
 }
 
 func stopService(s *mgr.Service) error {
@@ -172,9 +186,9 @@ func uninstall() error {
 
 	dir := filepath.Dir(installedExe())
 	if err := os.RemoveAll(dir); err != nil { // we may be running from it: delete what's left at reboot
-		for _, p := range []string{installedExe(), dir} {
-			p16, _ := windows.UTF16PtrFromString(p)
-			windows.MoveFileEx(p16, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+		left, _ := filepath.Glob(filepath.Join(dir, "*"))
+		for _, p := range append(left, dir) { // dir last: it must be empty by then
+			removeNowOrAtReboot(p)
 		}
 		fmt.Println("Some files in", dir, "are in use and will be deleted at the next reboot.")
 	}
