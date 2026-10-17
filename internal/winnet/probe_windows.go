@@ -18,6 +18,7 @@ var (
 	procIcmpSendEcho    = iphlpapi.NewProc("IcmpSendEcho")
 	procIcmpCloseHandle = iphlpapi.NewProc("IcmpCloseHandle")
 	procSendARP         = iphlpapi.NewProc("SendARP")
+	procGetIpNetTable   = iphlpapi.NewProc("GetIpNetTable")
 
 	wlanapi                = windows.NewLazySystemDLL("wlanapi.dll")
 	procWlanOpenHandle     = wlanapi.NewProc("WlanOpenHandle")
@@ -124,6 +125,47 @@ func ResolveMAC(ip net.IP) (net.HardwareAddr, error) {
 		return nil, syscall.Errno(r)
 	}
 	return bytes.Clone(mac[:size]), nil
+}
+
+// PinnedMAC returns ip's ARP entry on the adapter; static is true for a pinned (permanent) entry.
+// A missing entry returns a nil MAC and no error.
+func PinnedMAC(ifIndex int, ip net.IP) (mac net.HardwareAddr, static bool, err error) {
+	addr, ok := ipAddr(ip)
+	if !ok {
+		return nil, false, errors.New("winnet: not an IPv4 address")
+	}
+	var size uint32
+	var buf []byte
+	for {
+		var p uintptr
+		if len(buf) > 0 {
+			p = uintptr(unsafe.Pointer(&buf[0]))
+		}
+		r, _, _ := procGetIpNetTable.Call(p, uintptr(unsafe.Pointer(&size)), 0)
+		if r == 0 {
+			break
+		}
+		if r == uintptr(windows.ERROR_NO_DATA) {
+			return nil, false, nil // empty table
+		}
+		if r != uintptr(windows.ERROR_INSUFFICIENT_BUFFER) {
+			return nil, false, syscall.Errno(r)
+		}
+		buf = make([]byte, size)
+	}
+	// MIB_IPNETTABLE: entry count, then 24-byte MIB_IPNETROWs: index, MAC length, MAC[8], IPv4, type.
+	n := binary.LittleEndian.Uint32(buf)
+	if 4+24*uint64(n) > uint64(len(buf)) {
+		return nil, false, errors.New("winnet: truncated ARP table")
+	}
+	for i := range n {
+		row := buf[4+24*i:][:24]
+		macLen := min(binary.LittleEndian.Uint32(row[4:]), 8)
+		if int(binary.LittleEndian.Uint32(row)) == ifIndex && uintptr(binary.LittleEndian.Uint32(row[16:])) == addr {
+			return bytes.Clone(row[8 : 8+macLen]), binary.LittleEndian.Uint32(row[20:]) == 4, nil // 4 = MIB_IPNET_TYPE_STATIC
+		}
+	}
+	return nil, false, nil
 }
 
 // SSID returns the Wi-Fi network the adapter is connected to, or "" if unknown.

@@ -44,6 +44,7 @@ type guard struct {
 	capt       *arpguard.Capture
 	newGateway net.HardwareAddr // MAC the gateway answers with when it differs from trusted
 	last       netwatch.Probe   // latest probe, for tray status
+	pinFails   int              // consecutive ticks the pin was found missing or wrong
 
 	detMu sync.Mutex // det is used from the capture goroutine
 	det   *arpguard.Detector
@@ -151,6 +152,7 @@ func (g *guard) tick(now time.Time) {
 			}
 		}
 	}
+	g.checkPin()
 	g.last = g.probe()
 	for _, a := range g.m.Step(g.last, now) {
 		g.do(a)
@@ -172,7 +174,7 @@ func pickAdapter(ads []winnet.Adapter) (winnet.Adapter, bool) {
 
 func (g *guard) connect(a winnet.Adapter) {
 	g.disconnect()
-	g.cur = a
+	g.cur, g.pinFails = a, 0
 	ssid := "wired"
 	if a.Wireless {
 		ssid = winnet.SSID(a.GUID)
@@ -215,6 +217,30 @@ func (g *guard) pin(mac net.HardwareAddr) {
 	g.detMu.Lock()
 	g.det = &arpguard.Detector{Gateway: g.cur.Gateway, Trusted: mac, Cooldown: 5 * time.Minute}
 	g.detMu.Unlock()
+}
+
+// checkPin restores the pin if it vanished or changed (arp -d, a driver reset, a netsh failure netsh didn't report).
+func (g *guard) checkPin() {
+	if g.trusted == nil || !g.cur.Up {
+		return
+	}
+	mac, static, err := winnet.PinnedMAC(g.cur.Index, g.cur.Gateway)
+	if err != nil {
+		g.log.Error("read arp table", "err", err)
+		return
+	}
+	if static && bytes.Equal(mac, g.trusted) {
+		g.pinFails = 0
+		return
+	}
+	g.pinFails++
+	g.log.Warn("pin missing, re-pinning", "found", mac.String(), "static", static)
+	if g.pinFails == 2 {
+		g.alert("pin_failed", "can't keep the gateway pinned; ARP spoofing protection is off")
+	}
+	if err := winnet.PinGateway(g.cur.Index, g.cur.Gateway, g.trusted); err != nil {
+		g.log.Error("pin gateway", "err", err)
+	}
 }
 
 func (g *guard) disconnect() {
