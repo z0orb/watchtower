@@ -5,8 +5,11 @@ import (
 	"cmp"
 	_ "embed"
 	"encoding/json"
+	"io"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 	"unsafe"
@@ -76,6 +79,7 @@ func onReady(logPath string) {
 	dns := systray.AddMenuItem(labels["restore_dns"], "Switch back to the router's DNS servers")
 	optimize := systray.AddMenuItem(labels["optimize_adapter"], "Turn off adapter power saving (applies after a reboot)")
 	revert := systray.AddMenuItem(labels["revert_tuning"], "Restore the adapter settings changed by Optimize")
+	report := systray.AddMenuItem("Connection report", "Outages in the last 24 hours and 7 days")
 	openLog := systray.AddMenuItem("Open log", "")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit tray", "Protection keeps running in the service")
@@ -95,6 +99,10 @@ func onReady(logPath string) {
 				t.send("optimize_adapter")
 			case <-revert.ClickedCh:
 				t.send("revert_tuning")
+			case <-report.ClickedCh:
+				if err := openReport(logPath); err != nil {
+					notify("Connection report failed", err.Error())
+				}
 			case <-openLog.ClickedCh:
 				exec.Command("notepad.exe", logPath).Start()
 			case <-quit.ClickedCh:
@@ -187,6 +195,21 @@ func (t *tray) flushHeld() {
 			notify(heldToast(held))
 		}
 	}
+}
+
+func openReport(logPath string) error {
+	var logs []io.Reader
+	for _, p := range []string{logPath + ".2", logPath + ".1", logPath} {
+		if f, err := os.Open(p); err == nil {
+			defer f.Close()
+			logs = append(logs, f)
+		}
+	}
+	out := filepath.Join(os.TempDir(), "watchtower-report.txt")
+	if err := os.WriteFile(out, []byte(Report(logs, time.Now())), 0o644); err != nil {
+		return err
+	}
+	return exec.Command("notepad.exe", out).Start()
 }
 
 func notify(title, body string) {

@@ -142,3 +142,8 @@ var actionNames = [...]string{"flush_dns", "set_public_dns", "restore_dns", "ren
 	"alert_upstream", "alert_gateway_changed", "alert_give_up"}
 
 func (a Action) String() string { return actionNames[a] }
+
+var diagnosisNames = [...]string{"healthy", "link_down", "dead", "gateway_changed", "upstream", "dns_broken"}
+
+// Diagnosis names the problem seen by the last Step, or "healthy".
+func (m *Machine) Diagnosis() string { return diagnosisNames[m.diag] }

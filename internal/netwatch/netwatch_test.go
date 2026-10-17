@@ -112,3 +112,14 @@ func TestGameSafety(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosis(t *testing.T) {
+	m := New(DefaultConfig)
+	for p, want := range map[*Probe]string{&ok: "healthy", &deadP: "dead", &upP: "upstream", &dnsP: "dns_broken",
+		&movedP: "gateway_changed", {Network: "home"}: "link_down"} {
+		m.Step(*p, t0)
+		if got := m.Diagnosis(); got != want {
+			t.Errorf("Diagnosis after %+v = %q, want %q", *p, got, want)
+		}
+	}
+}

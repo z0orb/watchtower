@@ -47,6 +47,7 @@ type guard struct {
 	newGateway net.HardwareAddr // MAC the gateway answers with when it differs from trusted
 	last       netwatch.Probe   // latest probe, for tray status
 	pinFails   int              // consecutive ticks the pin was found missing or wrong
+	out        outage           // the outage in progress; zero start = none
 
 	detMu sync.Mutex // det is used from the capture goroutine
 	det   *arpguard.Detector
@@ -160,8 +161,36 @@ func (g *guard) tick(now time.Time) {
 	}
 	g.checkPin()
 	g.last = g.probe()
-	for _, a := range g.m.Step(g.last, now) {
+	acts := g.m.Step(g.last, now)
+	g.trackOutage(now)
+	for _, a := range acts {
 		g.do(a)
+	}
+}
+
+type outage struct {
+	start   time.Time
+	diag    string
+	actions []string
+}
+
+// trackOutage logs one "outage" line per outage, for the tray's connection report.
+func (g *guard) trackOutage(now time.Time) {
+	d := g.m.Diagnosis()
+	switch {
+	case d != "healthy" && g.out.start.IsZero():
+		g.out = outage{start: now, diag: d}
+	case d == "healthy" && !g.out.start.IsZero():
+		// shorter than the failures needed to act is a blip, not an outage
+		if now.Sub(g.out.start) >= time.Duration(g.m.Cfg.Fails)*probeEvery {
+			fixed := ""
+			if n := len(g.out.actions); n > 0 {
+				fixed = g.out.actions[n-1]
+			}
+			g.log.Info("outage", "start", g.out.start, "seconds", int(now.Sub(g.out.start).Seconds()),
+				"diagnosis", g.out.diag, "actions", g.out.actions, "fixed_by", fixed)
+		}
+		g.out = outage{}
 	}
 }
 
@@ -375,6 +404,9 @@ func (g *guard) probe() netwatch.Probe {
 }
 
 func (g *guard) do(a netwatch.Action) {
+	if !g.out.start.IsZero() {
+		g.out.actions = append(g.out.actions, a.String())
+	}
 	var err error
 	switch a {
 	case netwatch.FlushDNS:
