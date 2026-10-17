@@ -22,12 +22,13 @@ var icon []byte
 const appID = "Watchtower"
 
 var labels = map[string]string{"retrust": "Re-trust gateway", "restore_dns": "Restore DNS",
-	"optimize_adapter": "Optimize adapter", "revert_tuning": "Revert tuning"}
+	"optimize_adapter": "Optimize adapter", "revert_tuning": "Revert tuning", "selftest": "Test protection"}
 
 // done is the success message; the default is "Done".
 var done = map[string]string{
 	"optimize_adapter": "Adapter power saving is off. It takes effect after a reboot.",
 	"revert_tuning":    "Adapter settings restored. They take effect after a reboot.",
+	"selftest":         "Protection works: a forged gateway packet was detected and the pin held.",
 }
 
 type tray struct {
@@ -50,6 +51,7 @@ func onReady(logPath string) {
 	t.status.Disable()
 	t.show(nil)
 	systray.AddSeparator()
+	selftest := systray.AddMenuItem(labels["selftest"], "Send a harmless forged packet and check that it's caught")
 	retrust := systray.AddMenuItem(labels["retrust"], "Only after replacing your router: trusts the MAC it answers with now")
 	dns := systray.AddMenuItem(labels["restore_dns"], "Switch back to the router's DNS servers")
 	optimize := systray.AddMenuItem(labels["optimize_adapter"], "Turn off adapter power saving (applies after a reboot)")
@@ -62,6 +64,8 @@ func onReady(logPath string) {
 	go func() {
 		for {
 			select {
+			case <-selftest.ClickedCh:
+				t.send("selftest")
 			case <-retrust.ClickedCh:
 				t.send("retrust")
 			case <-dns.ClickedCh:

@@ -58,21 +58,10 @@ func (c *Capture) Run(onARP func(*layers.ARP)) {
 // Probe broadcasts an ARP request for gw and returns every MAC that claimed gw within wait,
 // bypassing the Windows ARP cache (and any static pin).
 func (c *Capture) Probe(gw net.IP, wait time.Duration) ([]net.HardwareAddr, error) {
-	eth := &layers.Ethernet{SrcMAC: c.mac, DstMAC: layers.EthernetBroadcast, EthernetType: layers.EthernetTypeARP}
-	arp := &layers.ARP{
-		AddrType: layers.LinkTypeEthernet, Protocol: layers.EthernetTypeIPv4,
-		HwAddressSize: 6, ProtAddressSize: 4, Operation: layers.ARPRequest,
-		SourceHwAddress: c.mac, SourceProtAddress: c.ip,
-		DstHwAddress: make([]byte, 6), DstProtAddress: gw.To4(),
-	}
-	buf := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{}, eth, arp); err != nil {
-		return nil, err
-	}
 	c.mu.Lock()
 	c.probeGW, c.replies = gw.To4(), nil
 	c.mu.Unlock()
-	err := c.h.WritePacketData(buf.Bytes())
+	err := c.send(layers.EthernetBroadcast, layers.ARPRequest, c.mac, c.ip, gw)
 	if err == nil {
 		time.Sleep(wait)
 	}
@@ -81,4 +70,25 @@ func (c *Capture) Probe(gw net.IP, wait time.Duration) ([]net.HardwareAddr, erro
 	replies := c.replies
 	c.probeGW, c.replies = nil, nil
 	return replies, err
+}
+
+// SendForged sends a harmless forged ARP reply claiming ip is at fake, for testing detection: it's unicast
+// to a locally administered MAC no device has, so no real ARP cache takes it, but the capture still sees it.
+func (c *Capture) SendForged(ip net.IP, fake net.HardwareAddr) error {
+	return c.send(net.HardwareAddr{0x02, 0, 0, 0, 0, 0x01}, layers.ARPReply, fake, ip, c.ip)
+}
+
+func (c *Capture) send(dst net.HardwareAddr, op uint16, srcMAC net.HardwareAddr, srcIP, dstIP net.IP) error {
+	eth := &layers.Ethernet{SrcMAC: c.mac, DstMAC: dst, EthernetType: layers.EthernetTypeARP}
+	arp := &layers.ARP{
+		AddrType: layers.LinkTypeEthernet, Protocol: layers.EthernetTypeIPv4,
+		HwAddressSize: 6, ProtAddressSize: 4, Operation: op,
+		SourceHwAddress: srcMAC, SourceProtAddress: srcIP.To4(),
+		DstHwAddress: make([]byte, 6), DstProtAddress: dstIP.To4(),
+	}
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{}, eth, arp); err != nil {
+		return err
+	}
+	return c.h.WritePacketData(buf.Bytes())
 }

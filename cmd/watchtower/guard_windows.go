@@ -38,6 +38,8 @@ type guard struct {
 	npcap bool
 	srv   *ipc.Server
 
+	selftest chan struct{} // the capture goroutine signals here when it sees the self-test packet
+
 	cur        winnet.Adapter
 	key        string // SSID (or "wired") + "|" + gateway IP
 	trusted    net.HardwareAddr
@@ -57,6 +59,8 @@ func runGuard(ctx context.Context, log *slog.Logger) error {
 		m:     netwatch.New(netwatch.DefaultConfig),
 		npcap: arpguard.NpcapAvailable(),
 		srv:   ipc.NewServer(),
+
+		selftest: make(chan struct{}, 1),
 	}
 	if err := store.Load(g.path, &g.st); err != nil {
 		return fmt.Errorf("load %s: %w", g.path, err)
@@ -120,6 +124,8 @@ func (g *guard) command(name string) error {
 		return optimizeAdapter(g.cur.GUID)
 	case "revert_tuning":
 		return revertTuning()
+	case "selftest":
+		return g.selfTest()
 	}
 	return fmt.Errorf("unknown command %q", name)
 }
@@ -279,6 +285,39 @@ func (g *guard) probeGateway() ([]net.HardwareAddr, error) {
 	return []net.HardwareAddr{mac}, nil
 }
 
+// selftestMAC marks the self-test's forged packet so it doesn't raise a real alert.
+var selftestMAC = net.HardwareAddr{0x02, 0x57, 0x57, 0, 0, 0x01}
+
+// selfTest forges a gateway claim and checks that detection sees it and the pin holds.
+func (g *guard) selfTest() error {
+	if g.capt == nil {
+		return errors.New("live detection needs Npcap: install it from https://npcap.com")
+	}
+	if g.trusted == nil {
+		return errors.New("the gateway isn't pinned")
+	}
+	select {
+	case <-g.selftest: // drop a stale signal
+	default:
+	}
+	if err := g.capt.SendForged(g.cur.Gateway, selftestMAC); err != nil {
+		return err
+	}
+	select {
+	case <-g.selftest:
+	case <-time.After(2 * time.Second):
+		return errors.New("detection didn't see the forged test packet")
+	}
+	mac, static, err := winnet.PinnedMAC(g.cur.Index, g.cur.Gateway)
+	if err != nil {
+		return err
+	}
+	if !static || !bytes.Equal(mac, g.trusted) {
+		return errors.New("the forged packet was detected, but the gateway pin is missing")
+	}
+	return nil
+}
+
 // spoofAlerts maps a Spoof kind to its alert kind and message.
 var spoofAlerts = map[string][2]string{
 	arpguard.KindGateway: {"arp_spoof", "forged ARP packet claims to be the gateway (blocked by the pin)"},
@@ -296,6 +335,11 @@ func (g *guard) onARP(a *layers.ARP) {
 	}
 	g.detMu.Unlock()
 	switch {
+	case bad && s.Kind == arpguard.KindGateway && bytes.Equal(s.Attacker, selftestMAC):
+		select {
+		case g.selftest <- struct{}{}:
+		default:
+		}
 	case bad && s.Notify:
 		g.alert(spoofAlerts[s.Kind][0], spoofAlerts[s.Kind][1], "attacker", s.Attacker.String(),
 			"claimed_ip", net.IP(a.SourceProtAddress))
