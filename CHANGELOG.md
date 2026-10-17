@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-18
+
 ### Added
 - **Do Not Disturb** in the tray menu: alert toasts are held and only logged. Turning it off shows one toast,
   "N alerts while notifications were paused", instead of every alert. It is off each time the tray starts.
@@ -37,6 +39,7 @@ First release.
   Re-trust gateway, Restore DNS, Optimize adapter / Revert tuning, Connection report, Open log.
 - `install` / `uninstall` for the service and tray autostart.
 
-[Unreleased]: https://github.com/z0orb/watchtower/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/z0orb/watchtower/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/z0orb/watchtower/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/z0orb/watchtower/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/z0orb/watchtower/releases/tag/v0.1.0
