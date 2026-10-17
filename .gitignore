@@ -1,6 +1,7 @@
 # AI assistant instructions (local only)
 CLAUDE.md
 AGENTS.md
+HANDOFF.md
 
 # Build output
 /watchtower.exe
