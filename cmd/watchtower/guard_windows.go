@@ -215,7 +215,8 @@ func (g *guard) pin(mac net.HardwareAddr) {
 		g.log.Info("pinned gateway", "ip", g.cur.Gateway, "mac", mac.String())
 	}
 	g.detMu.Lock()
-	g.det = &arpguard.Detector{Gateway: g.cur.Gateway, Trusted: mac, Cooldown: 5 * time.Minute}
+	g.det = &arpguard.Detector{Gateway: g.cur.Gateway, Trusted: mac, Self: g.cur.IP, SelfMAC: g.cur.MAC,
+		Cooldown: 5 * time.Minute}
 	g.detMu.Unlock()
 }
 
@@ -278,6 +279,14 @@ func (g *guard) probeGateway() ([]net.HardwareAddr, error) {
 	return []net.HardwareAddr{mac}, nil
 }
 
+// spoofAlerts maps a Spoof kind to its alert kind and message.
+var spoofAlerts = map[string][2]string{
+	arpguard.KindGateway: {"arp_spoof", "forged ARP packet claims to be the gateway (blocked by the pin)"},
+	arpguard.KindSelf: {"arp_spoof_self", "another device claims your IP address: it may be cutting you off or " +
+		"intercepting your traffic, which the pin can't block. Enable ARP binding or a DHCP reservation on the router"},
+	arpguard.KindScan: {"arp_scan", "a device is scanning the network, often the first step of an ARP attack"},
+}
+
 func (g *guard) onARP(a *layers.ARP) {
 	g.detMu.Lock()
 	var s arpguard.Spoof
@@ -288,10 +297,10 @@ func (g *guard) onARP(a *layers.ARP) {
 	g.detMu.Unlock()
 	switch {
 	case bad && s.Notify:
-		g.alert("arp_spoof", "forged ARP packet claims to be the gateway (blocked by the pin)",
-			"attacker", s.Attacker.String(), "gateway", net.IP(a.SourceProtAddress))
+		g.alert(spoofAlerts[s.Kind][0], spoofAlerts[s.Kind][1], "attacker", s.Attacker.String(),
+			"claimed_ip", net.IP(a.SourceProtAddress))
 	case bad:
-		g.log.Warn("arp spoof repeat", "attacker", s.Attacker.String())
+		g.log.Warn("arp spoof repeat", "kind", s.Kind, "attacker", s.Attacker.String())
 	}
 }
 
