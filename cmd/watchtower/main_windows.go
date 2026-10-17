@@ -9,18 +9,21 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 
 	"github.com/z0orb/watchtower/internal/store"
+	"github.com/z0orb/watchtower/internal/tray"
 )
 
 const serviceName = "Watchtower"
 
 const usage = `usage: watchtower <command>
   run      run in this console (admin), logging to the console too
-  service  entry point used by the Windows service manager`
+  service  entry point used by the Windows service manager
+  tray     notification-area status and alerts (runs as the logged-in user)`
 
 func main() {
 	if len(os.Args) != 2 {
@@ -33,6 +36,9 @@ func main() {
 		err = runConsole()
 	case "service":
 		err = svc.Run(serviceName, handler{})
+	case "tray":
+		hideOwnConsole()
+		tray.Run(filepath.Join(store.Dir(), "watchtower.log"))
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -40,6 +46,21 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "watchtower:", err)
 		os.Exit(1)
+	}
+}
+
+var (
+	kernel32               = windows.NewLazySystemDLL("kernel32.dll")
+	procGetConsoleProcList = kernel32.NewProc("GetConsoleProcessList")
+	procFreeConsole        = kernel32.NewProc("FreeConsole")
+)
+
+// hideOwnConsole closes the console window Windows opened for us (e.g. when started from the Run key),
+// but keeps a terminal we were started from.
+func hideOwnConsole() {
+	var pids [2]uint32
+	if n, _, _ := procGetConsoleProcList.Call(uintptr(unsafe.Pointer(&pids[0])), 2); n == 1 {
+		procFreeConsole.Call()
 	}
 }
 
