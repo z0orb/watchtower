@@ -49,9 +49,9 @@ var labels = map[string]string{"retrust": "Re-trust gateway", "restore_dns": "Re
 
 // done is the success message; the default is "Done".
 var done = map[string]string{
-	"optimize_adapter": "Adapter power saving is off. It takes effect after a reboot.",
-	"revert_tuning":    "Adapter settings restored. They take effect after a reboot.",
-	"selftest":         "Protection works: a forged gateway packet was detected and the pin held.",
+	"optimize_adapter": "Done. Takes effect after a reboot.",
+	"revert_tuning":    "Done. Takes effect after a reboot.",
+	"selftest":         "Protection works.",
 }
 
 type tray struct {
@@ -153,7 +153,7 @@ func (t *tray) read(c net.Conn) {
 		case "status":
 			t.show(m.Status)
 		case "alert":
-			t.alert(m.Text)
+			t.alert(m.Name, m.Text)
 		case "result":
 			if m.Text != "" {
 				notify(labels[m.Name]+" failed", m.Text)
@@ -174,14 +174,18 @@ func (t *tray) send(cmd string) {
 }
 
 // alert toasts now, or holds it until the game or presentation ends; command results are never held.
-func (t *tray) alert(msg string) {
+func (t *tray) alert(kind, text string) {
+	title, body := alertToast(kind, text)
 	if !busy() {
-		notify("Watchtower alert", msg)
+		notify(title, body)
 		return
+	}
+	if title == "Watchtower alert" {
+		title = body // no short form: the full text is the only description
 	}
 	t.mu.Lock()
 	if len(t.held) < 100 {
-		t.held = append(t.held, msg)
+		t.held = append(t.held, title)
 	}
 	t.mu.Unlock()
 }

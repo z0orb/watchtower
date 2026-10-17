@@ -52,6 +52,27 @@ func Summary(st *ipc.Status) (string, Level) {
 	return s, l
 }
 
+// shortAlerts is the default, terse toast per alert kind; the full text stays in the log.
+var shortAlerts = map[string][2]string{
+	"arp_spoof":       {"Attack blocked", "A device tried to impersonate your router."},
+	"arp_spoof_self":  {"IP address hijacked", "Another device is claiming your IP."},
+	"arp_scan":        {"Network scan", "A device is scanning your network."},
+	"pin_failed":      {"Protection off", "Couldn't keep your router pinned."},
+	"trust_failed":    {"Router not pinned", "Couldn't verify your router."},
+	"npcap_missing":   {"Npcap missing", "Live attack detection is off."},
+	"upstream":        {"Internet down", "Your router is fine; the ISP or modem isn't."},
+	"gateway_changed": {"Router changed", "Re-trust it if you replaced the router."},
+	"recovery_failed": {"Still offline", "Auto-fix failed; retrying in 5 min."},
+}
+
+// alertToast is the toast for an alert; kinds without a short form show the service's full text.
+func alertToast(kind, text string) (title, body string) {
+	if a, ok := shortAlerts[kind]; ok {
+		return a[0], a[1]
+	}
+	return "Watchtower alert", text
+}
+
 // heldToast merges alerts held back during a game into one toast: the distinct messages, first 3 shown.
 func heldToast(alerts []string) (title, body string) {
 	var uniq []string
@@ -60,9 +81,9 @@ func heldToast(alerts []string) (title, body string) {
 			uniq = append(uniq, a)
 		}
 	}
-	title = fmt.Sprintf("%d Watchtower alerts while you were busy", len(alerts))
+	title = fmt.Sprintf("%d alerts while you were busy", len(alerts))
 	if len(alerts) == 1 {
-		title = "Watchtower alert while you were busy"
+		title = "Alert while you were busy"
 	}
 	if len(uniq) > 3 {
 		uniq = append(uniq[:3], fmt.Sprintf("…and %d more in the log", len(uniq)-3))

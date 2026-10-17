@@ -32,11 +32,20 @@ func TestSummary(t *testing.T) {
 }
 
 func TestHeldToast(t *testing.T) {
-	if title, body := heldToast([]string{"a"}); title != "Watchtower alert while you were busy" || body != "a" {
+	if title, body := heldToast([]string{"a"}); title != "Alert while you were busy" || body != "a" {
 		t.Errorf("one: %q %q", title, body)
 	}
 	title, body := heldToast([]string{"a", "b", "a", "c", "d", "e"})
-	if title != "6 Watchtower alerts while you were busy" || body != "a\nb\nc\n…and 2 more in the log" {
+	if title != "6 alerts while you were busy" || body != "a\nb\nc\n…and 2 more in the log" {
 		t.Errorf("many: %q %q", title, body)
+	}
+}
+
+func TestAlertToast(t *testing.T) {
+	if title, body := alertToast("arp_scan", "long text"); title != "Network scan" || body != "A device is scanning your network." {
+		t.Errorf("known: %q %q", title, body)
+	}
+	if title, body := alertToast("new_kind", "long text"); title != "Watchtower alert" || body != "long text" {
+		t.Errorf("unknown: %q %q", title, body)
 	}
 }
