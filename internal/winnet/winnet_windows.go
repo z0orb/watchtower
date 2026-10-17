@@ -26,6 +26,8 @@ func run(cmdLine string) error {
 	return nil
 }
 
+// shortcut: netsh exits 0 on syntax errors, so a bad argument fails silently; syntax-check new commands
+// unelevated (valid ones stop at "requires elevation") until output parsing is worth its localization cost.
 func netsh(args string) error { return run("netsh " + args) }
 
 func idx(ifIndex int) string { return strconv.Itoa(ifIndex) }
@@ -37,7 +39,7 @@ func PinGateway(ifIndex int, ip net.IP, mac net.HardwareAddr) error {
 }
 
 func UnpinGateway(ifIndex int, ip net.IP) error {
-	return netsh("interface ipv4 delete neighbors interface=" + idx(ifIndex) + " address=" + ip.String() + " store=active")
+	return netsh("interface ipv4 delete neighbors name=" + idx(ifIndex) + " address=" + ip.String() + " store=active")
 }
 
 func FlushDNS() error {
