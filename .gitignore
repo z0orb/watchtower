@@ -1,0 +1,8 @@
+# AI assistant instructions (local only)
+CLAUDE.md
+AGENTS.md
+
+# Build output
+/watchtower.exe
+/dist/
+*.log
