@@ -5,6 +5,7 @@ import (
 	"cmp"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -150,9 +151,33 @@ func (t *tray) show(st *ipc.Status) {
 	systray.SetTooltip("Watchtower: " + s)
 }
 
+// startService starts the stopped Watchtower service; install lets interactive users do that without UAC.
+func startService() {
+	m, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return
+	}
+	defer windows.CloseServiceHandle(m)
+	name, _ := windows.UTF16PtrFromString("Watchtower")
+	s, err := windows.OpenService(m, name, windows.SERVICE_START)
+	if err != nil {
+		return // not installed, or installed by a version before 0.1.3
+	}
+	defer windows.CloseServiceHandle(s)
+	windows.StartService(s, 0, nil)
+}
+
 func (t *tray) connectLoop() {
+	var lastStart time.Time
 	for {
-		if c, err := ipc.Dial(2 * time.Second); err == nil {
+		c, err := ipc.Dial(2 * time.Second)
+		// No pipe at all means the service is stopped (a pipe owned by `watchtower run` is a different error).
+		// At most once a minute, so a service that keeps failing isn't restarted in a tight loop.
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && time.Since(lastStart) > time.Minute {
+			lastStart = time.Now()
+			startService()
+		}
+		if err == nil {
 			t.mu.Lock()
 			t.conn = c
 			t.mu.Unlock()

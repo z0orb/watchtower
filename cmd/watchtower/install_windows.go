@@ -83,6 +83,9 @@ func install() (err error) {
 			return fmt.Errorf("set recovery: %w", err)
 		}
 	}
+	if err := allowUserStart(s); err != nil {
+		return fmt.Errorf("service permissions: %w", err)
+	}
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, runKey, registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -102,6 +105,22 @@ func install() (err error) {
 		fmt.Println("then restart the service: sc stop Watchtower && sc start Watchtower")
 	}
 	return nil
+}
+
+// serviceSDDL is the default service DACL plus SERVICE_START (RP) for interactive users, so the tray can restart
+// a stopped service without UAC; stopping and reconfiguring stay admin-only.
+const serviceSDDL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+
+func allowUserStart(s *mgr.Service) error {
+	sd, err := windows.SecurityDescriptorFromString(serviceSDDL)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(s.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
 // copyExe works while the old copy still runs (e.g. the tray): a running exe can be renamed, not overwritten.

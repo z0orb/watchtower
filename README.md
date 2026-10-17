@@ -30,6 +30,7 @@ watchtower.exe uninstall   # removes it all, unpins the gateway, restores DNS an
 Double-clicking `watchtower.exe` opens the tray. The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
 your router), **Restore DNS**, **Optimize adapter** / **Revert tuning** (take effect after a reboot), **Do Not Disturb** (alerts are only logged;
 turning it off shows one "N alerts while notifications were paused" toast) and **Open log**.
+If the service stops, the tray starts it again; to turn protection off for good, use `uninstall`.
 State and logs live in `%ProgramData%\Watchtower`.
 
 ## Build
