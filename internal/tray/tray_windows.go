@@ -62,8 +62,13 @@ type tray struct {
 	held []string // alerts held back while busy()
 }
 
-// Run blocks until the user quits the tray.
+// Run blocks until the user quits the tray. A second tray in the same session only points to the first.
 func Run(logPath string) {
+	name, _ := windows.UTF16PtrFromString(`Local\WatchtowerTray`)
+	if _, err := windows.CreateMutex(nil, false, name); err == windows.ERROR_ALREADY_EXISTS {
+		notify("Watchtower is already running", "Look for the shield in the tray (^ hidden icons).")
+		return
+	}
 	// Registers the app name shown on toasts (HKCU); toasts still work if this fails.
 	toast.SetAppData(toast.AppData{AppID: appID, GUID: "{7d1d6f9f-57f8-4ec8-a038-7c6a9fea5c1f}"})
 	systray.Run(func() { onReady(logPath) }, nil)

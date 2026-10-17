@@ -27,7 +27,7 @@ watchtower.exe install     # copies itself to %ProgramFiles%\Watchtower, starts 
 watchtower.exe uninstall   # removes it all, unpins the gateway, restores DNS and adapter settings
 ```
 
-The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
+Double-clicking `watchtower.exe` opens the tray. The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
 your router), **Restore DNS**, **Optimize adapter** / **Revert tuning** (take effect after a reboot) and **Open log**.
 State and logs live in `%ProgramData%\Watchtower`.
 

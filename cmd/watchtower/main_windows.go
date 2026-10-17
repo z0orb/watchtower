@@ -24,15 +24,18 @@ const usage = `usage: watchtower <command>
   uninstall  remove them, unpinning the gateway and restoring DNS (admin)
   run      run in this console (admin), logging to the console too
   service  entry point used by the Windows service manager
-  tray     notification-area status and alerts (runs as the logged-in user)`
+  tray     notification-area status and alerts (runs as the logged-in user; the default, e.g. on double-click)`
 
 func main() {
-	if len(os.Args) != 2 {
+	cmd := "tray" // no arguments, e.g. double-clicked in Explorer
+	if len(os.Args) == 2 {
+		cmd = os.Args[1]
+	} else if len(os.Args) > 2 {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
 	var err error
-	switch os.Args[1] {
+	switch cmd {
 	case "install":
 		err = install()
 	case "uninstall":
