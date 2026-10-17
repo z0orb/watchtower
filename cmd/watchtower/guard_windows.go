@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"github.com/gopacket/gopacket/layers"
 
 	"github.com/z0orb/watchtower/internal/arpguard"
+	"github.com/z0orb/watchtower/internal/ipc"
 	"github.com/z0orb/watchtower/internal/netwatch"
 	"github.com/z0orb/watchtower/internal/store"
 	"github.com/z0orb/watchtower/internal/winnet"
@@ -34,12 +36,14 @@ type guard struct {
 	st    state
 	m     *netwatch.Machine
 	npcap bool
+	srv   *ipc.Server
 
 	cur        winnet.Adapter
 	key        string // SSID (or "wired") + "|" + gateway IP
 	trusted    net.HardwareAddr
 	capt       *arpguard.Capture
 	newGateway net.HardwareAddr // MAC the gateway answers with when it differs from trusted
+	last       netwatch.Probe   // latest probe, for tray status
 
 	detMu sync.Mutex // det is used from the capture goroutine
 	det   *arpguard.Detector
@@ -51,6 +55,7 @@ func runGuard(ctx context.Context, log *slog.Logger) error {
 		path:  filepath.Join(store.Dir(), "state.json"),
 		m:     netwatch.New(netwatch.DefaultConfig),
 		npcap: arpguard.NpcapAvailable(),
+		srv:   ipc.NewServer(),
 	}
 	if err := store.Load(g.path, &g.st); err != nil {
 		return fmt.Errorf("load %s: %w", g.path, err)
@@ -59,27 +64,69 @@ func runGuard(ctx context.Context, log *slog.Logger) error {
 		g.st.Trusted = map[string]string{}
 	}
 	log.Info("started", "npcap", g.npcap)
+	if l, err := ipc.Listen(); err != nil {
+		log.Error("ipc listen; tray won't connect", "err", err) // protection still runs
+	} else {
+		defer l.Close()
+		go g.srv.Serve(l)
+	}
 	if !g.npcap {
 		g.alert("npcap_missing", "Npcap is not installed: live ARP monitoring is off. Install it from https://npcap.com")
 	}
-	if g.st.PublicDNSIf != 0 {
-		g.restoreDNS() // left over from a crash or power loss
-	}
+	g.restoreDNS() // left over from a crash or power loss, if any
 	defer g.shutdown()
 
 	t := time.NewTicker(probeEvery)
 	defer t.Stop()
+	g.tick(time.Now())
 	for {
-		g.tick(time.Now())
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
+			g.tick(time.Now())
+		case c := <-g.srv.Cmds: // run here so guard state stays single-goroutine
+			err := g.command(c.Name)
+			g.log.Info("tray command", "cmd", c.Name, "err", err)
+			c.Reply(err)
+			g.sendStatus()
 		}
 	}
 }
 
+func (g *guard) command(name string) error {
+	switch name {
+	case "retrust":
+		if g.cur.Index == 0 {
+			return errors.New("not connected")
+		}
+		replies, perr := g.probeGateway()
+		mac, err := arpguard.ChooseTrusted(replies)
+		if err != nil {
+			return fmt.Errorf("%w (probe: %v); keeping the old pin", err, perr)
+		}
+		g.st.Trusted[g.key] = mac.String()
+		g.save()
+		g.log.Info("re-trusted gateway", "network", g.key, "mac", mac.String())
+		g.pin(mac)
+		return nil
+	case "restore_dns":
+		return g.restoreDNS()
+	}
+	return fmt.Errorf("unknown command %q", name)
+}
+
+func (g *guard) sendStatus() {
+	st := ipc.Status{Network: g.key, Adapter: g.cur.Name, Npcap: g.npcap, PublicDNS: g.st.PublicDNSIf != 0,
+		Link: g.last.Link, Gateway: g.last.Gateway, Internet: g.last.Internet, DNS: g.last.DNS}
+	if g.trusted != nil {
+		st.Trusted = g.trusted.String()
+	}
+	g.srv.Send(ipc.Msg{Type: "status", Status: &st})
+}
+
 func (g *guard) tick(now time.Time) {
+	defer g.sendStatus()
 	ads, err := winnet.Adapters()
 	if err != nil {
 		g.log.Error("list adapters", "err", err)
@@ -97,7 +144,8 @@ func (g *guard) tick(now time.Time) {
 			}
 		}
 	}
-	for _, a := range g.m.Step(g.probe(), now) {
+	g.last = g.probe()
+	for _, a := range g.m.Step(g.last, now) {
 		g.do(a)
 	}
 }
@@ -147,14 +195,18 @@ func (g *guard) connect(a winnet.Adapter) {
 		g.save()
 		g.log.Info("trusted gateway", "network", g.key, "mac", mac.String())
 	}
+	g.pin(mac)
+}
+
+func (g *guard) pin(mac net.HardwareAddr) {
 	g.trusted = mac
-	if err := winnet.PinGateway(a.Index, a.Gateway, mac); err != nil {
+	if err := winnet.PinGateway(g.cur.Index, g.cur.Gateway, mac); err != nil {
 		g.log.Error("pin gateway", "err", err)
 	} else {
-		g.log.Info("pinned gateway", "ip", a.Gateway, "mac", mac.String())
+		g.log.Info("pinned gateway", "ip", g.cur.Gateway, "mac", mac.String())
 	}
 	g.detMu.Lock()
-	g.det = &arpguard.Detector{Gateway: a.Gateway, Trusted: mac, Cooldown: 5 * time.Minute}
+	g.det = &arpguard.Detector{Gateway: g.cur.Gateway, Trusted: mac, Cooldown: 5 * time.Minute}
 	g.detMu.Unlock()
 }
 
@@ -176,9 +228,7 @@ func (g *guard) disconnect() {
 
 func (g *guard) shutdown() {
 	g.disconnect()
-	if g.st.PublicDNSIf != 0 {
-		g.restoreDNS()
-	}
+	g.restoreDNS()
 	g.log.Info("stopped")
 }
 
@@ -272,6 +322,9 @@ func (g *guard) do(a netwatch.Action) {
 }
 
 func (g *guard) restoreDNS() error {
+	if g.st.PublicDNSIf == 0 {
+		return nil // already restored, e.g. from the tray
+	}
 	err := winnet.RestoreDNS(g.st.PublicDNSIf)
 	g.st.PublicDNSIf, g.st.RouterDNS = 0, ""
 	g.save()
@@ -284,7 +337,8 @@ func (g *guard) save() {
 	}
 }
 
-// alert is a user-facing event; the tray app will show these as toasts once IPC exists.
+// alert is a user-facing event: logged, and shown by the tray as a toast.
 func (g *guard) alert(kind, msg string, args ...any) {
 	g.log.Warn(msg, append([]any{"alert", kind}, args...)...)
+	g.srv.Send(ipc.Msg{Type: "alert", Name: kind, Text: msg})
 }
