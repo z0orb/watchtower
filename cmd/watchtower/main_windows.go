@@ -19,15 +19,19 @@ import (
 
 const serviceName = "Watchtower"
 
+// version is set by the release build (-ldflags "-X main.version=0.1.3").
+var version = "dev"
+
 const usage = `usage: watchtower <command>
   install    install (or update) the service and tray autostart (admin)
   uninstall  remove them, unpinning the gateway and restoring DNS (admin)
   run      run in this console (admin), logging to the console too
   service  entry point used by the Windows service manager
-  tray     notification-area status and alerts (runs as the logged-in user; the default, e.g. on double-click)`
+  tray     notification-area status and alerts (runs as the logged-in user)
+Without a command (e.g. double-clicked) it offers to install or update, then opens the tray.`
 
 func main() {
-	cmd := "tray" // no arguments, e.g. double-clicked in Explorer
+	cmd := "" // no arguments, e.g. double-clicked in Explorer
 	if len(os.Args) == 2 {
 		cmd = os.Args[1]
 	} else if len(os.Args) > 2 {
@@ -36,10 +40,13 @@ func main() {
 	}
 	var err error
 	switch cmd {
+	case "":
+		hideOwnConsole()
+		launch()
 	case "install":
-		err = install()
+		err = adminCommand(cmd, install)
 	case "uninstall":
-		err = uninstall()
+		err = adminCommand(cmd, uninstall)
 	case "run":
 		err = runConsole()
 	case "service":
@@ -63,11 +70,17 @@ var (
 	procFreeConsole        = kernel32.NewProc("FreeConsole")
 )
 
-// hideOwnConsole closes the console window Windows opened for us (e.g. when started from the Run key),
-// but keeps a terminal we were started from.
-func hideOwnConsole() {
+// ownsConsole reports whether Windows opened a console just for us (Explorer, the Run key, Settings › Apps)
+// rather than us running in a terminal.
+func ownsConsole() bool {
 	var pids [2]uint32
-	if n, _, _ := procGetConsoleProcList.Call(uintptr(unsafe.Pointer(&pids[0])), 2); n == 1 {
+	n, _, _ := procGetConsoleProcList.Call(uintptr(unsafe.Pointer(&pids[0])), 2)
+	return n == 1
+}
+
+// hideOwnConsole closes the console window Windows opened for us, but keeps a terminal we were started from.
+func hideOwnConsole() {
+	if ownsConsole() {
 		procFreeConsole.Call()
 	}
 }

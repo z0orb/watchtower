@@ -21,6 +21,17 @@ import (
 
 const runKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
 
+// sayTo collects install/uninstall output for a message box; nil prints it.
+var sayTo *strings.Builder
+
+func say(a ...any) {
+	if sayTo != nil {
+		fmt.Fprintln(sayTo, a...)
+	} else {
+		fmt.Println(a...)
+	}
+}
+
 // The SYSTEM service runs this copy: Program Files is admin-only, unlike wherever the user downloaded it.
 func installedExe() string {
 	return filepath.Join(os.Getenv("ProgramFiles"), "Watchtower", "watchtower.exe")
@@ -95,14 +106,44 @@ func install() (err error) {
 		return fmt.Errorf("tray autostart: %w", err)
 	}
 
+	if err := writeUninstallEntry(dst); err != nil {
+		return fmt.Errorf("Apps & features entry: %w", err)
+	}
+
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start service: %w", err)
 	}
-	fmt.Println("Installed to", dst, "and started the Watchtower service.")
-	fmt.Println("The tray starts at next sign-in; to start it now, run (not as admin):", `"`+dst+`" tray`)
+	say("Installed to", dst, "and started the Watchtower service.")
+	say("The tray starts at next sign-in; to start it now, run (not as admin):", `"`+dst+`" tray`)
 	if !arpguard.NpcapAvailable() {
-		fmt.Println("Npcap is missing, so live ARP-spoof detection is off. Install it from https://npcap.com,")
-		fmt.Println("then restart the service: sc stop Watchtower && sc start Watchtower")
+		say("Npcap is missing, so live ARP-spoof detection is off. Install it from https://npcap.com,")
+		say("then restart the service: sc stop Watchtower && sc start Watchtower")
+	}
+	return nil
+}
+
+// writeUninstallEntry lists Watchtower in Settings › Apps, whose Uninstall runs `watchtower.exe uninstall`.
+func writeUninstallEntry(exe string) error {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallKey, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	for name, v := range map[string]string{"DisplayName": "Watchtower", "DisplayVersion": version, "Publisher": "z0orb",
+		"DisplayIcon": exe, "InstallLocation": filepath.Dir(exe), "UninstallString": `"` + exe + `" uninstall`,
+		"URLInfoAbout": "https://github.com/z0orb/watchtower"} {
+		if err := k.SetStringValue(name, v); err != nil {
+			return err
+		}
+	}
+	size := uint32(0)
+	if fi, err := os.Stat(exe); err == nil {
+		size = uint32(fi.Size() / 1024)
+	}
+	for name, v := range map[string]uint32{"NoModify": 1, "NoRepair": 1, "EstimatedSize": size} {
+		if err := k.SetDWordValue(name, v); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -189,7 +230,7 @@ func uninstall() error {
 	}
 
 	if err := revertTuning(); err != nil {
-		fmt.Println("Couldn't revert all adapter tuning (see", tuningPath()+"):", err)
+		say("Couldn't revert all adapter tuning (see", tuningPath()+"):", err)
 	}
 
 	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, runKey, registry.SET_VALUE); err == nil {
@@ -198,6 +239,9 @@ func uninstall() error {
 			return err
 		}
 		k.Close()
+	}
+	if err := registry.DeleteKey(registry.LOCAL_MACHINE, uninstallKey); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return err
 	}
 	// Close trays (any user) so their exe can be deleted; spare this process.
 	exec.Command("taskkill", "/F", "/IM", "watchtower.exe", "/FI", "PID ne "+strconv.Itoa(os.Getpid())).Run()
@@ -209,8 +253,8 @@ func uninstall() error {
 		for _, p := range append(left, dir) { // dir last: it must be empty by then
 			removeNowOrAtReboot(p)
 		}
-		fmt.Println("Some files in", dir, "are in use and will be deleted at the next reboot.")
+		say("Some files in", dir, "are in use and will be deleted at the next reboot.")
 	}
-	fmt.Println("Uninstalled. Settings and logs are kept in", store.Dir(), "(delete it to remove them).")
+	say("Uninstalled. Settings and logs are kept in", store.Dir(), "(delete it to remove them).")
 	return nil
 }

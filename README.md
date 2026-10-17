@@ -20,14 +20,22 @@ Windows (10 LTSC, 10, 11) background tool that:
 
 ## Install
 
-From an Administrator terminal:
+Download `watchtower.exe` from the [latest release](https://github.com/z0orb/watchtower/releases/latest) and
+double-click it. It asks to install, Windows asks for administrator permission, and the tray icon appears.
+Double-clicking a newer version later offers to update. To remove it, use **Settings › Apps › Watchtower ›
+Uninstall**.
+
+The exe isn't code-signed yet, so on a fresh download Windows SmartScreen may say "Windows protected your PC":
+choose **More info › Run anyway**.
+
+From an Administrator terminal instead:
 
 ```
 watchtower.exe install     # copies itself to %ProgramFiles%\Watchtower, starts the service, adds the tray to startup
 watchtower.exe uninstall   # removes it all, unpins the gateway, restores DNS and adapter settings
 ```
 
-Double-clicking `watchtower.exe` opens the tray. The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
+The tray icon shows the status and pops up alerts. Its menu has **Re-trust gateway** (use it only after replacing
 your router), **Restore DNS**, **Optimize adapter** / **Revert tuning** (take effect after a reboot), **Do Not Disturb** (alerts are only logged;
 turning it off shows one "N alerts while notifications were paused" toast) and **Open log**.
 If the service stops, the tray starts it again; to turn protection off for good, use `uninstall`.

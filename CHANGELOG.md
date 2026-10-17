@@ -5,11 +5,17 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Install, update and uninstall without a terminal: double-clicking `watchtower.exe` offers to install it (or to
+  update an older installed version), asks for administrator permission, then opens the tray. Watchtower is
+  listed in Settings › Apps, where Uninstall removes it. The `install` / `uninstall` commands still work from
+  an admin terminal.
+
 ### Fixed
 - If the service stops (killed, crashed past its restart limit, or stopped), the tray now starts it again
   within a minute instead of showing "The Watchtower service isn't running". `install` lets signed-in users
-  start the service (not stop, reconfigure or delete it), so no admin prompt is needed. Run `install` again
-  to get this on an existing installation.
+  start the service (not stop, reconfigure or delete it), so no admin prompt is needed. Updating
+  an existing installation applies it.
 
 ## [0.1.2] - 2026-10-18
 
