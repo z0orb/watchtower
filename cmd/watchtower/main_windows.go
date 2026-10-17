@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +20,8 @@ import (
 const serviceName = "Watchtower"
 
 const usage = `usage: watchtower <command>
+  install    install (or update) the service and tray autostart (admin)
+  uninstall  remove them, unpinning the gateway and restoring DNS (admin)
   run      run in this console (admin), logging to the console too
   service  entry point used by the Windows service manager
   tray     notification-area status and alerts (runs as the logged-in user)`
@@ -32,6 +33,10 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "install":
+		err = install()
+	case "uninstall":
+		err = uninstall()
 	case "run":
 		err = runConsole()
 	case "service":
@@ -80,8 +85,8 @@ func setupLog(console bool) (*slog.Logger, error) {
 }
 
 func runConsole() error {
-	if !windows.GetCurrentProcessToken().IsElevated() {
-		return errors.New("run it from an elevated (Administrator) terminal")
+	if err := requireAdmin(); err != nil {
+		return err
 	}
 	log, err := setupLog(true)
 	if err != nil {
